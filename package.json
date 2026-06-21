@@ -1,0 +1,22 @@
+{
+  "name": "search-typeahead",
+  "version": "1.0.0",
+  "description": "Search typeahead system — SQLite source of truth, Redis distributed cache routed by consistent hashing, recency-aware trending, and batched search-count writes.",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "load-data": "node scripts/load-data.js",
+    "bench": "node scripts/perf-bench.js",
+    "redis:up": "docker compose up -d",
+    "redis:down": "docker compose down"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.21.2",
+    "redis": "^4.7.0"
+  },
+  "license": "MIT"
+}
