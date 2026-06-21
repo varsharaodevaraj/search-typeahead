@@ -1,0 +1,26 @@
+# OPTIONAL. By default the app uses three logical cache nodes = three DBs (0/1/2)
+# on a single local Redis, so you only need `redis-server` running. This file is
+# for the alternative setup: three SEPARATE Redis processes, so the distributed
+# cache genuinely spans three servers.
+#
+#   docker compose up -d        (or: npm run redis:up)
+#
+# Then point each node at its own port in src/config.js REDIS_NODES:
+#   { id: 'cache-node-0', host: '127.0.0.1', port: 6379, db: 0 }
+#   { id: 'cache-node-1', host: '127.0.0.1', port: 6380, db: 0 }
+#   { id: 'cache-node-2', host: '127.0.0.1', port: 6381, db: 0 }
+#
+# The consistent-hash ring and all application code are identical either way.
+services:
+  redis-0:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6379:6379"]
+  redis-1:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6380:6379"]
+  redis-2:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["6381:6379"]
