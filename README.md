@@ -24,6 +24,10 @@ Batch writer (buffer + coalesce) ──flush every 500 writes / 2s──► SQLi
                                                                     (source of truth)
 ```
 
+## Screenshots
+
+![Search Typeahead UI — black-on-white theme with trending and live-stats panels](docs/screenshots/ui.png)
+
 ## Tech stack
 
 - **Node.js + Express** — API server and static file host.

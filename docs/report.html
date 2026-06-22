@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Search Typeahead — Project Report</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  body {
+    font: 11pt/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #111; margin: 0;
+  }
+  h1 { font-size: 24pt; margin: 0 0 2pt; letter-spacing: -0.5px; }
+  h2 { font-size: 14pt; margin: 22pt 0 6pt; border-bottom: 2px solid #111; padding-bottom: 3pt; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 3pt; }
+  p, li { margin: 4pt 0; }
+  .sub { color: #555; font-size: 10.5pt; margin: 0 0 4pt; }
+  .meta { color: #555; font-size: 10pt; margin: 0 0 14pt; }
+  code { background: #f2f2f2; border: 1px solid #ddd; border-radius: 3px; padding: 0 4px; font-size: 9.5pt; }
+  pre {
+    background: #fafafa; border: 1px solid #ddd; border-radius: 5px;
+    padding: 10px 12px; font: 8.2pt/1.35 "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre; overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0; font-size: 10pt; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; vertical-align: top; }
+  th { background: #f2f2f2; }
+  .num td:last-child, .num th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .kpi { display: flex; gap: 10px; margin: 8pt 0; }
+  .kpi div { flex: 1; border: 1px solid #111; border-radius: 6px; padding: 8px 10px; text-align: center; }
+  .kpi .v { font-size: 16pt; font-weight: 700; }
+  .kpi .l { font-size: 8.5pt; color: #555; }
+  .small { font-size: 9.5pt; color: #555; }
+  ul { margin: 4pt 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+
+  <h1>Search Typeahead System</h1>
+  <p class="sub">Project Report — distributed cache · consistent hashing · recency-aware trending · batched writes</p>
+  <p class="meta">Repository: github.com/varsharaodevaraj/search-typeahead &nbsp;·&nbsp; Stack: Node.js + Express, SQLite, Redis, vanilla JS</p>
+
+  <h2>1. Architecture</h2>
+  <p>A search-typeahead backend and UI. As the user types, the system suggests popular queries; on submit it records the query and updates its popularity. The design focus is the data system: how query counts are stored, how suggestions are served with low latency, how the cache is distributed with consistent hashing, and how write pressure is reduced with batching.</p>
+  <p>Two request paths share one durable store. The <b>read path</b> is cache-first; the <b>write path</b> is deferred and batched.</p>
+  <pre>
+                         +------------------------------------------+
+                         |                Browser UI                |
+                         |  debounced typing - keyboard nav - panels |
+                         +---------------+--------------+-----------+
+        GET /suggest?q=&amp;mode=           |              |  POST /search {query}
+                         +---------------v------+   +----v--------------------+
+                         |   READ PATH (fast)   |   |  WRITE PATH (deferred)  |
+                         |   suggest.js         |   |  search.js -> batch.js  |
+                         +----------+-----------+   +----------+--------------+
+                cache-first         |                          | enqueue + coalesce
+                         +----------v-----------+              | flush every
+                         | Cache layer cache.js |              | 500 writes / 2s
+                         | consistent-hash ring |              | (one transaction)
+                         | 3 logical Redis nodes|              |
+                         +----------+-----------+              |
+                            miss    | refill         invalidate affected
+                         +----------v---------------------------v-----------+
+                         |                 SQLite (db.js)                    |
+                         |  queries(query PK, count, trend_score, last_updated)
+                         |  source of truth - prefix = range scan on PK index|
+                         +---------------------------------------------------+
+  </pre>
+  <h3>Components</h3>
+  <ul>
+    <li><b>db.js (SQLite source of truth):</b> one table keyed by query text. Prefix matching is a range scan — every string starting with prefix <code>p</code> sorts inside <code>[p, p+'￿')</code>, so the scan rides the primary-key index. No in-memory trie to rebuild or lose on restart, and read/write counts are measurable.</li>
+    <li><b>ring.js (consistent-hash ring):</b> each node is scattered as 150 virtual points on a 2^32 ring; a key is owned by the first virtual node clockwise from <code>md5(key)</code>. Even load, and adding/removing a node remaps only ~1/N of keys.</li>
+    <li><b>cache.js (distributed cache):</b> N logical Redis nodes behind the ring. Key <code>suggest:&lt;mode&gt;:&lt;prefix&gt;</code>; the prefix is hashed so both modes co-locate and invalidate together. Every call is wrapped — a down node is a miss and the read falls back to SQLite (graceful degradation).</li>
+    <li><b>batch.js (write path):</b> buffers searches, coalesces repeats, flushes in one transaction every 500 writes or 2s, snapshot-then-write so mid-flush searches are not lost.</li>
+    <li><b>trending.js (recency-aware ranking):</b> lazily decayed <code>trend_score</code> blended with popularity.</li>
+    <li><b>server.js:</b> Express routes plus graceful-shutdown flush.</li>
+  </ul>
+
+  <h2>2. Dataset — source & loading</h2>
+  <p><b>Source:</b> Peter Norvig's public word-frequency lists, derived from the Google Web Trillion Word Corpus — <code>count_1w.txt</code> (~333k single words) and <code>count_2w.txt</code> (~286k two-word phrases).</p>
+  <p><b>Loading:</b> <code>npm run load-data</code> downloads the lists, merges the unigrams with the top-100k bigrams, scales the raw counts down (so a live <code>+1</code> search is meaningful), and bulk-inserts into SQLite. Result: <b>424,188 rows</b> (well above the 100k minimum). If the network is unavailable it falls back to a synthetic Zipf-distributed dataset, so the loader never hard-fails.</p>
+  <table>
+    <tr><th>query</th><th>count</th></tr>
+    <tr><td>iphone</td><td>100000</td></tr>
+    <tr><td>iphone 15</td><td>85000</td></tr>
+    <tr><td>iphone charger</td><td>60000</td></tr>
+  </table>
+  <p class="small">Run order: <code>npm install</code> → <code>brew services start redis</code> → <code>npm run load-data</code> → <code>npm start</code> (http://localhost:3000).</p>
+
+  <h2>3. API documentation</h2>
+  <table>
+    <tr><th>Method &amp; path</th><th>Purpose</th><th>Behavior</th></tr>
+    <tr><td><code>GET /suggest?q=&lt;prefix&gt;&amp;mode=</code></td><td>fetch suggestions</td><td>Up to 10 prefix matches. <code>mode=basic</code> → by all-time count; <code>mode=trending</code> (default) → recency-aware blend. Returns <code>{query, mode, cache:hit|miss, node, suggestions[]}</code>.</td></tr>
+    <tr><td><code>POST /search</code> <code>{query}</code></td><td>submit a search</td><td>Returns <code>{message:"Searched", query, recorded}</code> and enqueues a batched count update.</td></tr>
+    <tr><td><code>GET /trending?limit=N</code></td><td>global hot feed</td><td>Currently-trending queries (all-time top before any activity).</td></tr>
+    <tr><td><code>GET /cache/debug?prefix=&lt;p&gt;</code></td><td>debug routing</td><td>Which cache node owns the prefix and whether it is a hit/miss.</td></tr>
+    <tr><td><code>GET /stats</code></td><td>live metrics</td><td>DB rows + read/write counts, cache hit rate per node, suggest p50/p95/p99 latency, batch write-reduction.</td></tr>
+  </table>
+
+  <h2>4. Design choices & trade-offs</h2>
+  <ul>
+    <li><b>SQLite range scan, not a trie.</b> Correct, durable across restarts, and measurable. A trie is faster in memory but lost on restart and harder to instrument.</li>
+    <li><b>Cache-first reads.</b> Only a miss touches SQLite; the result is written back. This keeps p95 latency sub-millisecond.</li>
+    <li><b>Consistent hashing on the prefix.</b> 150 vnodes/node give even load; adding/removing a node remaps only ~1/N of keys (vs. nearly all for <code>hash % N</code>). Hashing the prefix co-locates a prefix's two modes so invalidation is single-node.</li>
+    <li><b>Batched writes.</b> Repeats are coalesced and applied in one transaction per window. <i>Trade-off:</i> a clean shutdown flushes first (zero loss); a hard crash loses only the un-flushed buffer (≤ 500 searches, i.e. a few popularity counts) — acceptable for a popularity counter, and the price of not writing synchronously.</li>
+    <li><b>Recency-aware trending.</b> <code>score = α·normCount + (1−α)·normRecency</code> (α = 0.5), with lazy exponential decay (1-hour half-life). A brief spike decays below a floor and stops ranking, so nothing is over-ranked forever. The cache is invalidated on every flush so rankings stay fresh.</li>
+    <li><b>Graceful degradation.</b> If Redis is down, reads fall back to SQLite — the system slows, it never breaks.</li>
+  </ul>
+
+  <h2>5. Performance report</h2>
+  <p class="small">Measured by <code>npm run bench</code> against a local server (3 logical Redis nodes, 424k-row dataset): 2,000 <code>/suggest</code> reads (repeated prefixes, so the cache warms) and 1,000 <code>/search</code> writes, then the server's own <code>/stats</code>.</p>
+  <div class="kpi">
+    <div><div class="v">0.101 ms</div><div class="l">suggest p95 latency</div></div>
+    <div><div class="v">98.95%</div><div class="l">cache hit rate</div></div>
+    <div><div class="v">24.4×</div><div class="l">write reduction</div></div>
+  </div>
+
+  <h3>Suggest latency (read path)</h3>
+  <table class="num">
+    <tr><th>percentile</th><th>latency</th></tr>
+    <tr><td>p50</td><td>0.075 ms</td></tr>
+    <tr><td>p95</td><td>0.101 ms</td></tr>
+    <tr><td>p99</td><td>0.457 ms</td></tr>
+  </table>
+  <p class="small">Over 2,002 requests. The cache-first path keeps typical reads well under 1 ms; the p99 tail is cache misses that fall through to a SQLite range scan.</p>
+
+  <h3>Cache hit rate</h3>
+  <table class="num">
+    <tr><th>metric</th><th>value</th></tr>
+    <tr><td>hits / misses</td><td>1,981 / 21</td></tr>
+    <tr><td>hit rate</td><td>98.95%</td></tr>
+    <tr><td>routing across nodes (hits)</td><td>495 / 792 / 694</td></tr>
+    <tr><td>virtual nodes per physical node</td><td>150 / 150 / 150</td></tr>
+  </table>
+  <p class="small">~99% of reads were served from Redis without touching SQLite. Misses are cold-cache first lookups and reads right after a write invalidated that prefix.</p>
+
+  <h3>Write reduction (batching)</h3>
+  <table class="num">
+    <tr><th>metric</th><th>value</th></tr>
+    <tr><td>searches submitted</td><td>1,001</td></tr>
+    <tr><td>SQLite row writes</td><td>41</td></tr>
+    <tr><td>transactions (flushes)</td><td>3</td></tr>
+    <tr><td>write reduction</td><td>24.4×</td></tr>
+    <tr><td>transaction reduction</td><td>333.7×</td></tr>
+  </table>
+  <p class="small">1,001 individual searches became 41 row writes across 3 transactions — repeats coalesced into single <code>+delta</code> upserts. Confirmed by <code>dbIO.writes = 41</code> on <code>/stats</code>. Note: a fresh cold-start session shows lower hit rate and higher p95 until the cache warms; the numbers above are the steady-state benchmark.</p>
+
+</body>
+</html>
