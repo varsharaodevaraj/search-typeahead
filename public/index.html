@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Search Typeahead</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="head">
+      <h1>Search Typeahead</h1>
+      <p class="sub">distributed cache · consistent hashing · recency-aware trending · batched writes</p>
+    </header>
+
+    <section class="search">
+      <div class="modes" role="tablist" aria-label="Ranking mode">
+        <button class="mode active" data-mode="trending" role="tab" aria-selected="true">Trending (recency-aware)</button>
+        <button class="mode" data-mode="basic" role="tab" aria-selected="false">Basic (by count)</button>
+      </div>
+
+      <div class="box">
+        <input
+          id="q"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Start typing…  (e.g. ip, java, sea)"
+          aria-label="Search query"
+          aria-controls="dropdown"
+        />
+        <button id="go" class="go">Search</button>
+        <ul id="dropdown" class="dropdown" role="listbox" hidden></ul>
+      </div>
+
+      <div id="status" class="statusline" aria-live="polite"></div>
+      <div id="result" class="result" aria-live="polite"></div>
+    </section>
+
+    <section class="panels">
+      <div class="panel">
+        <h2>🔥 Trending</h2>
+        <ul id="trending" class="trending-list"><li class="muted">loading…</li></ul>
+      </div>
+
+      <div class="panel">
+        <h2>📊 Live stats</h2>
+        <dl id="stats" class="stats">
+          <div><dt>DB rows</dt><dd id="st-rows">–</dd></div>
+          <div><dt>Cache hit rate</dt><dd id="st-hit">–</dd></div>
+          <div><dt>Suggest p95</dt><dd id="st-p95">–</dd></div>
+          <div><dt>Write reduction</dt><dd id="st-wr">–</dd></div>
+          <div><dt>Cache nodes</dt><dd id="st-nodes">–</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span>type → <code>/suggest</code> · Enter/click → <code>/search</code> · routing → <code>/cache/debug?prefix=…</code></span>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
